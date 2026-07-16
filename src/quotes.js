@@ -1,6 +1,7 @@
-// Cotações: brapi.dev (ações/FIIs da B3) e CoinGecko (cripto, em BRL).
+// Cotações: brapi.dev (ações/FIIs/opções da B3), CoinGecko (cripto) e
+// AwesomeAPI (moedas), tudo em BRL.
 import { httpGet } from "./backend";
-import { API_KINDS } from "./model";
+import { API_KINDS, isAutoOption } from "./model";
 
 export async function fetchStockQuotes(tickers, token) {
   if (!tickers.length) return {};
@@ -34,6 +35,39 @@ export async function fetchCryptoQuotes(ids) {
   return out;
 }
 
+// Opções da B3 via brapi. A API é indexada por ativo-objeto + vencimento,
+// então agrupamos as posições e buscamos cada cadeia (chain) uma vez.
+// Retorna { quotes: { CODIGO -> {price, strike, side} }, errors: [] }.
+export async function fetchOptionQuotes(items, token) {
+  const groups = new Map();
+  for (const i of items) {
+    if (!isAutoOption(i)) continue;
+    const key = `${i.underlying.toUpperCase()}|${i.expiration}`;
+    if (!groups.has(key)) groups.set(key, { underlying: i.underlying.toUpperCase(), expiration: i.expiration });
+  }
+  const list = [...groups.values()];
+  const quotes = {};
+  const errors = [];
+  const results = await Promise.allSettled(
+    list.map(async (g) => {
+      const url =
+        `https://brapi.dev/api/v2/options/chain?underlying=${encodeURIComponent(g.underlying)}` +
+        `&expirationDate=${encodeURIComponent(g.expiration)}` +
+        (token ? `&token=${encodeURIComponent(token)}` : "");
+      const json = JSON.parse(await httpGet(url));
+      for (const s of json.series || []) {
+        if (s && s.symbol && s.close != null) {
+          quotes[s.symbol.toUpperCase()] = { price: s.close, strike: s.strike, side: s.side };
+        }
+      }
+    })
+  );
+  results.forEach((r, idx) => {
+    if (r.status === "rejected") errors.push(`Opções ${list[idx].underlying}: ${r.reason?.message || r.reason}`);
+  });
+  return { quotes, errors };
+}
+
 // Moedas via AwesomeAPI (ex.: USD-BRL, EUR-BRL). Sem token.
 export async function fetchCurrencyQuotes(pairs) {
   if (!pairs.length) return {};
@@ -59,14 +93,18 @@ export async function refreshItems(items, brapiToken) {
   const cryptos = [...new Set(items.filter((i) => i.kind === "cripto" && i.ticker).map((i) => i.ticker.toLowerCase()))];
   const currencies = [...new Set(items.filter((i) => i.kind === "moeda" && i.ticker).map((i) => i.ticker.toUpperCase()))];
 
+  const options = items.filter(isAutoOption);
+
   const errors = [];
   let stockQ = {};
   let cryptoQ = {};
   let currencyQ = {};
-  const [rs, rc, rm] = await Promise.allSettled([
+  let optionQ = {};
+  const [rs, rc, rm, ro] = await Promise.allSettled([
     fetchStockQuotes(stocks, brapiToken),
     fetchCryptoQuotes(cryptos),
     fetchCurrencyQuotes(currencies),
+    fetchOptionQuotes(options, brapiToken),
   ]);
   if (rs.status === "fulfilled") stockQ = rs.value;
   else if (stocks.length) errors.push("Ações/FIIs: " + rs.reason.message);
@@ -74,9 +112,18 @@ export async function refreshItems(items, brapiToken) {
   else if (cryptos.length) errors.push("Cripto: " + rc.reason.message);
   if (rm.status === "fulfilled") currencyQ = rm.value;
   else if (currencies.length) errors.push("Moedas: " + rm.reason.message);
+  if (ro.status === "fulfilled") {
+    optionQ = ro.value.quotes;
+    errors.push(...ro.value.errors);
+  } else if (options.length) errors.push("Opções: " + ro.reason.message);
 
   const now = new Date().toISOString();
   const updated = items.map((i) => {
+    if (isAutoOption(i)) {
+      const q = optionQ[i.ticker.toUpperCase()];
+      if (!q) return i;
+      return { ...i, lastPrice: q.price, lastChange: null, lastUpdate: now };
+    }
     if (!API_KINDS.includes(i.kind) || !i.ticker) return i;
     const q =
       i.kind === "cripto" ? cryptoQ[i.ticker.toLowerCase()]
@@ -92,5 +139,5 @@ export async function refreshItems(items, brapiToken) {
 }
 
 export function hasApiItems(items) {
-  return items.some((i) => API_KINDS.includes(i.kind) && i.ticker);
+  return items.some((i) => (API_KINDS.includes(i.kind) && i.ticker) || isAutoOption(i));
 }

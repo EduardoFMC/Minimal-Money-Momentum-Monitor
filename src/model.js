@@ -11,6 +11,7 @@ export const DEFAULT_CATEGORIES = [
   { id: "saude", name: "Saúde", color: "#34d399" },
   { id: "educacao", name: "Educação", color: "#fbbf24" },
   { id: "salario", name: "Salário", color: "#4ade80" },
+  { id: "investimentos", name: "Investimentos", color: "#22d3ee" },
   { id: "outros", name: "Outros", color: "#94a3b8" },
 ];
 
@@ -27,6 +28,17 @@ export const KINDS = {
 // tipos cotados automaticamente via API
 export const API_KINDS = ["acao", "fii", "cripto", "moeda"];
 
+// Opção com dados suficientes para cotação automática (código do contrato +
+// ativo-objeto + vencimento). Sem isso, o preço é manual (campo tracejado).
+export function isAutoOption(a) {
+  return a && a.kind === "opcao" && !!a.ticker && !!a.underlying && !!a.expiration;
+}
+
+// Ativo tem preço vindo de API (não é manual)?
+export function isApiPriced(a) {
+  return API_KINDS.includes(a.kind) || isAutoOption(a);
+}
+
 export const INDEXERS = ["% CDI", "IPCA +", "Selic +", "Prefixado", "Poupança", "Outro"];
 
 export function uid() {
@@ -41,11 +53,12 @@ export function defaultData() {
       theme: { preset: "escuro", colors: {} },
       autoRefreshMin: 5,   // 0 = desligado
       autoLaunched: [],    // controle das assinaturas já lançadas ("2026-08|spotify|assinaturas|out")
+      autoInvested: [],    // controle dos aportes mensais já lançados ("2026-08|<idAtivo>")
       importedFitids: [],  // FITIDs de extratos OFX já importados (deduplicação)
     },
     categories: DEFAULT_CATEGORIES,
-    expenses: [],   // { id, date, desc, catId, amount, type: "in"|"out", recurring, auto? }
-    fixed: [],      // renda fixa: { id, name, issuer, indexer, rate, applied, appliedDate, maturity, liquidity, currentValue, estValue?, estNet?, estIr?, estDate?, attrs, notes }
+    expenses: [],   // { id, date, desc, catId, amount, type: "in"|"out", recurring, auto?, aporte? }
+    fixed: [],      // renda fixa: { id, name, issuer, indexer, rate, applied, appliedDate, maturity, liquidity, currentValue, monthly?, monthlyDay?, contribs?, estValue?, estNet?, estIr?, estIof?, estDate?, attrs, notes }
     variable: [],   // renda variável: { id, kind, ticker, name, qty, avgPrice, lastPrice, lastChange, lastUpdate, attrs, notes }
     watchlist: [],  // monitoramento: { id, kind, ticker, name, target, lastPrice, lastChange, lastUpdate, attrs, notes }
     history: [],    // snapshots diários do patrimônio: { d: "2026-07-14", rf, rv, total }
@@ -62,7 +75,7 @@ export function migrate(raw) {
   for (const k of ["categories", "expenses", "fixed", "variable", "watchlist", "history"]) {
     if (!Array.isArray(d[k])) d[k] = base[k];
   }
-  for (const k of ["autoLaunched", "importedFitids"]) {
+  for (const k of ["autoLaunched", "autoInvested", "importedFitids"]) {
     if (!Array.isArray(d.settings[k])) d.settings[k] = [];
   }
   if (typeof d.settings.autoRefreshMin !== "number") d.settings.autoRefreshMin = 5;
@@ -81,10 +94,10 @@ export function launchRecurring(d, todayIso) {
   const norm = (s) => (s || "").trim().toLowerCase();
   const keyOf = (t) => `${norm(t.desc)}|${t.catId}|${t.type}`;
 
-  // última ocorrência de cada recorrente
+  // última ocorrência de cada recorrente (aportes têm ledger próprio)
   const latest = new Map();
   for (const t of d.expenses) {
-    if (!t.recurring) continue;
+    if (!t.recurring || t.aporte) continue;
     const k = keyOf(t);
     const g = latest.get(k);
     if (!g || t.date > g.date) latest.set(k, t);
@@ -133,6 +146,93 @@ export function launchRecurring(d, todayIso) {
 }
 
 const r2 = (v) => Math.round(v * 100) / 100;
+
+// Aplica um aporte avulso AGORA a uma aplicação de renda fixa: soma ao valor
+// investido como uma parcela (contrib) datada de hoje e força re-estimativa.
+// A saída em Despesas é criada por quem chama.
+export function withContribution(f, amount, todayIso) {
+  const contribs = Array.isArray(f.contribs) && f.contribs.length
+    ? [...f.contribs]
+    : [{ date: f.appliedDate, amount: f.applied ?? 0 }];
+  contribs.push({ date: todayIso, amount });
+  // zera a estimativa antiga (era p/ o principal antigo) — a próxima
+  // atualização recalcula; até lá o card usa o valor aplicado
+  return { ...f, applied: r2((f.applied ?? 0) + amount), contribs, estValue: null, estNet: null, estIr: null, estIof: null, estDate: null };
+}
+
+// Aporte mensal ("reinvestimento como assinatura"): para cada aplicação de
+// renda fixa com `monthly` > 0, lança o aporte de cada mês que já chegou —
+// somando ao valor investido (parcela em `contribs`) e registrando uma SAÍDA
+// nas despesas (o dinheiro sai do saldo). Ledger evita lançar o mesmo mês 2x.
+// Retorna { data, count } ou null se não houver nada a lançar.
+export function applyMonthlyContributions(d, todayIso) {
+  const curMonth = todayIso.slice(0, 7);
+  const ledger = new Set(d.settings.autoInvested || []);
+  const hasInvCat = d.categories.some((c) => c.id === "investimentos");
+  const catId = "investimentos";
+
+  const newExpenses = [];
+  const newKeys = [];
+  let count = 0;
+  let changed = false;
+
+  const fixed = d.fixed.map((f) => {
+    const monthly = Number(f.monthly) || 0;
+    if (monthly <= 0 || !f.appliedDate) return f;
+    const day = Math.min(Math.max(parseInt(f.monthlyDay, 10) || parseInt(f.appliedDate.slice(8, 10), 10) || 1, 1), 28);
+    // aportes começam no mês seguinte ao da aplicação inicial
+    let contribs = Array.isArray(f.contribs) && f.contribs.length
+      ? [...f.contribs]
+      : [{ date: f.appliedDate, amount: f.applied ?? 0 }];
+    let applied = f.applied ?? 0;
+    let local = false;
+    let m = addMonths(f.appliedDate.slice(0, 7), 1);
+    while (m <= curMonth) {
+      const lk = `${m}|${f.id}`;
+      if (!ledger.has(lk)) {
+        newKeys.push(lk);
+        const date = `${m}-${String(day).padStart(2, "0")}`;
+        contribs.push({ date, amount: monthly });
+        applied = r2(applied + monthly);
+        newExpenses.push({
+          id: uid(),
+          date,
+          desc: `Aporte: ${f.name || "investimento"}`,
+          catId,
+          amount: monthly,
+          type: "out",
+          // recurring: false — a recorrência é controlada pelo ledger de
+          // aportes (autoInvested), não pelo mecanismo de assinaturas, para
+          // não lançar em duplicidade nem inflar o total de "Assinaturas".
+          recurring: false,
+          auto: true,
+          aporte: true,
+        });
+        count++;
+        local = true;
+      }
+      m = addMonths(m, 1);
+    }
+    if (!local) return f;
+    changed = true;
+    return { ...f, applied, contribs, estDate: null }; // força re-estimativa
+  });
+
+  if (!changed) return null;
+  return {
+    data: {
+      ...d,
+      fixed,
+      expenses: [...d.expenses, ...newExpenses],
+      categories: hasInvCat ? d.categories : [...d.categories, { id: "investimentos", name: "Investimentos", color: "#22d3ee" }],
+      settings: {
+        ...d.settings,
+        autoInvested: [...(d.settings.autoInvested || []), ...newKeys].slice(-600),
+      },
+    },
+    count,
+  };
+}
 
 // Registra/atualiza o snapshot de hoje do patrimônio (para o gráfico de
 // evolução). Devolve o MESMO objeto se nada mudou (evita gravações à toa).

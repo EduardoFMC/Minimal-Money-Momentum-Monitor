@@ -1,8 +1,18 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { fmtBRL, fmtPct, fmtDate, fmtDateTime, daysUntil, todayISO } from "../format";
-import { uid, KINDS, API_KINDS, INDEXERS } from "../model";
-import { Modal, Field, NumInput, MoneyInput, AttrEditor, AttrChips, DangerButton, Empty, InlinePrice } from "./ui";
+import { uid, KINDS, API_KINDS, INDEXERS, isAutoOption, withContribution } from "../model";
+import { Modal, Field, NumInput, MoneyInput, RateInput, AttrEditor, AttrChips, DangerButton, Empty, InlinePrice } from "./ui";
 import { LineChart } from "./charts";
+import { isIrExempt, buildFixedCurve } from "../fixedIncome";
+
+const HORIZONS = [
+  { lbl: "Hoje", mo: 0 },
+  { lbl: "1a", mo: 12 },
+  { lbl: "3a", mo: 36 },
+  { lbl: "5a", mo: 60 },
+  { lbl: "10a", mo: 120 },
+];
+const HORIZON_LABEL = { 12: "1 ano", 36: "3 anos", 60: "5 anos", 120: "10 anos" };
 
 export function rateLabel(indexer, rate) {
   if (!rate) return indexer || "—";
@@ -16,22 +26,32 @@ export function rateLabel(indexer, rate) {
   }
 }
 
-const OPTION_ATTR_SUGGESTIONS = [
-  { k: "Ativo-objeto", v: "" },
-  { k: "Strike", v: "" },
-  { k: "Vencimento", v: "" },
-  { k: "Estratégia", v: "" },
-];
-
 export default function Investments({ data, update }) {
-  const [tab, setTab] = useState("rf");
+  const [tab, setTab] = useState("resumo");
   const [rfModal, setRfModal] = useState(null);
   const [rvModal, setRvModal] = useState(null);
+  const [horizon, setHorizon] = useState(0); // meses de projeção; 0 = passado→hoje
+  const [curve, setCurve] = useState(null); // { points, firstDate }
 
-  const rfTotal = useMemo(
-    () => data.fixed.reduce((s, f) => s + (f.currentValue ?? f.estValue ?? f.applied ?? 0), 0),
-    [data.fixed]
-  );
+  // reconstrói o passado (séries reais do BCB) e projeta o futuro
+  useEffect(() => {
+    let alive = true;
+    buildFixedCurve(data.fixed, horizon)
+      .then((c) => alive && setCurve(c))
+      .catch(() => alive && setCurve(null));
+    return () => { alive = false; };
+  }, [data.fixed, horizon]);
+
+  const rf = useMemo(() => {
+    let applied = 0, total = 0, net = 0;
+    for (const f of data.fixed) {
+      applied += f.applied ?? 0;
+      total += f.currentValue ?? f.estValue ?? f.applied ?? 0;
+      // líquido: valor manual vale como está; estimativa usa o líquido de IR/IOF
+      net += f.currentValue ?? f.estNet ?? f.applied ?? 0;
+    }
+    return { applied, total, net, rend: total - applied, rendNet: net - applied };
+  }, [data.fixed]);
   const rv = useMemo(() => {
     let cost = 0, pos = 0;
     for (const a of data.variable) {
@@ -51,6 +71,26 @@ export default function Investments({ data, update }) {
     }));
     setRfModal(null);
   };
+
+  // aporte avulso: aplica mais dinheiro agora (salva os campos do form junto),
+  // soma ao investido e lança uma saída em Despesas (o dinheiro sai do saldo)
+  const aporteNow = (form, amount) => {
+    const today = todayISO();
+    update((d) => {
+      const asset = withContribution({ ...form, id: form.id || uid() }, amount, today);
+      const fixed = d.fixed.some((f) => f.id === asset.id)
+        ? d.fixed.map((f) => (f.id === asset.id ? asset : f))
+        : [...d.fixed, asset];
+      const hasInv = d.categories.some((c) => c.id === "investimentos");
+      const categories = hasInv ? d.categories : [...d.categories, { id: "investimentos", name: "Investimentos", color: "#22d3ee" }];
+      const expense = {
+        id: uid(), date: today, desc: `Aporte: ${form.name || "investimento"}`,
+        catId: "investimentos", amount, type: "out", recurring: false, auto: false, aporte: true,
+      };
+      return { ...d, fixed, categories, expenses: [...d.expenses, expense] };
+    });
+    setRfModal(null);
+  };
   const saveRv = (item) => {
     update((d) => ({
       ...d,
@@ -63,69 +103,156 @@ export default function Investments({ data, update }) {
 
   return (
     <section className="section">
-      <div className="summary-row">
-        <div className="stat">
-          <span className="stat-label">Renda fixa</span>
-          <span className="stat-value">{fmtBRL(rfTotal)}</span>
+      {/* os cards de resumo acompanham a aba selecionada */}
+      {tab === "resumo" && (
+        <div className="summary-row">
+          <div className="stat">
+            <span className="stat-label">Patrimônio total</span>
+            <span className="stat-value">{fmtBRL(rf.total + rv.pos)}</span>
+          </div>
+          <div className="stat">
+            <span className="stat-label">Renda fixa</span>
+            <span className="stat-value">{fmtBRL(rf.total)}</span>
+          </div>
+          <div className="stat">
+            <span className="stat-label">Renda variável</span>
+            <span className="stat-value">{fmtBRL(rv.pos)}</span>
+          </div>
+          <div className="stat">
+            <span className="stat-label">Resultado geral</span>
+            <span className={"stat-value " + (rf.rend + rv.pl >= 0 ? "pos" : "neg")}>
+              {fmtBRL(rf.rend + rv.pl)}
+              {rf.applied + rv.cost > 0 && <small> ({fmtPct(((rf.rend + rv.pl) / (rf.applied + rv.cost)) * 100)})</small>}
+            </span>
+          </div>
         </div>
-        <div className="stat">
-          <span className="stat-label">Renda variável</span>
-          <span className="stat-value">{fmtBRL(rv.pos)}</span>
+      )}
+      {tab === "rf" && (
+        <div className="summary-row">
+          <div className="stat">
+            <span className="stat-label">Aplicado</span>
+            <span className="stat-value">{fmtBRL(rf.applied)}</span>
+          </div>
+          <div className="stat">
+            <span className="stat-label">Valor atual</span>
+            <span className="stat-value">{fmtBRL(rf.total)}</span>
+          </div>
+          <div className="stat">
+            <span className="stat-label">Resultado</span>
+            <span className={"stat-value " + (rf.rend >= 0 ? "pos" : "neg")}>
+              {fmtBRL(rf.rend)} {rf.applied > 0 && <small>({fmtPct((rf.rend / rf.applied) * 100)})</small>}
+            </span>
+          </div>
+          <div className="stat">
+            <span className="stat-label">Resultado líq. est.</span>
+            <span className={"stat-value " + (rf.rendNet >= 0 ? "pos" : "neg")}>{fmtBRL(rf.rendNet)}</span>
+          </div>
         </div>
-        <div className="stat">
-          <span className="stat-label">Resultado RV</span>
-          <span className={"stat-value " + (rv.pl >= 0 ? "pos" : "neg")}>
-            {fmtBRL(rv.pl)} {rv.cost > 0 && <small>({fmtPct((rv.pl / rv.cost) * 100)})</small>}
-          </span>
-        </div>
-        <div className="stat">
-          <span className="stat-label">Total</span>
-          <span className="stat-value">{fmtBRL(rfTotal + rv.pos)}</span>
-        </div>
-      </div>
-
-      {data.history.length >= 2 && (
-        <div className="card">
-          <h4>
-            Patrimônio
-            {(() => {
-              const first = data.history[0];
-              const last = data.history[data.history.length - 1];
-              const delta = last.total - first.total;
-              return (
-                <span className={"h4-extra " + (delta >= 0 ? "pos" : "neg")}>
-                  {fmtBRL(delta)} desde {fmtDate(first.d)}
-                </span>
-              );
-            })()}
-          </h4>
-          <LineChart points={data.history.slice(-120).map((h) => ({ label: fmtDate(h.d), value: h.total }))} />
+      )}
+      {tab === "rv" && (
+        <div className="summary-row">
+          <div className="stat">
+            <span className="stat-label">Custo</span>
+            <span className="stat-value">{fmtBRL(rv.cost)}</span>
+          </div>
+          <div className="stat">
+            <span className="stat-label">Posição</span>
+            <span className="stat-value">{fmtBRL(rv.pos)}</span>
+          </div>
+          <div className="stat">
+            <span className="stat-label">Resultado</span>
+            <span className={"stat-value " + (rv.pl >= 0 ? "pos" : "neg")}>
+              {fmtBRL(rv.pl)} {rv.cost > 0 && <small>({fmtPct((rv.pl / rv.cost) * 100)})</small>}
+            </span>
+          </div>
         </div>
       )}
 
+      {tab === "resumo" && (() => {
+        const rvNow = rv.pos;
+        // curva reconstruída (RF via BCB) + RV mantida no valor atual;
+        // fallback para os snapshots gravados se o BCB estiver indisponível
+        let points = null, firstLabel = null;
+        if (curve && curve.points.length >= 2) {
+          points = curve.points.map((p) => ({ label: fmtDate(p.d), value: p.value + rvNow, future: p.future }));
+          firstLabel = fmtDate(curve.firstDate);
+        } else if (data.history.length >= 2) {
+          points = data.history.slice(-120).map((h) => ({ label: fmtDate(h.d), value: h.total, future: false }));
+          firstLabel = fmtDate(data.history[0].d);
+        }
+        if (!points) return null;
+        let nowIdx = points.length - 1;
+        for (let i = 0; i < points.length; i++) if (points[i].future) { nowIdx = i - 1; break; }
+        nowIdx = Math.max(0, nowIdx);
+        const nowVal = points[nowIdx].value;
+        const lastVal = points[points.length - 1].value;
+        // ganho REAL até hoje = valor atual − total investido (não conta aportes como ganho)
+        const gainNow = rf.rend + rv.pl;
+        // projeção: separa rendimento de novos aportes
+        const futureContrib = curve ? Math.max(0, curve.principalHorizon - curve.principalNow) : 0;
+        const projReturn = lastVal - nowVal - futureContrib;
+        return (
+          <div className="card">
+            <div className="chart-head">
+              <h4>
+                Patrimônio
+                <span className={"h4-extra " + (gainNow >= 0 ? "pos" : "neg")} title="Valor atual menos tudo o que você investiu">
+                  ganho {gainNow >= 0 ? "+" : ""}{fmtBRL(gainNow)} desde {firstLabel}
+                </span>
+              </h4>
+              <div className="seg mini">
+                {HORIZONS.map((hz) => (
+                  <button key={hz.mo} className={"seg-btn" + (horizon === hz.mo ? " on" : "")} onClick={() => setHorizon(hz.mo)}>
+                    {hz.lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <LineChart points={points} />
+            {horizon > 0 && curve && (
+              <div className="proj-summary">
+                <span>
+                  Em {HORIZON_LABEL[horizon]}: <b>{fmtBRL(lastVal)}</b> — rendimento{" "}
+                  <span className={projReturn >= 0 ? "pos" : "neg"}>{projReturn >= 0 ? "+" : ""}{fmtBRL(projReturn)}</span>
+                  {futureContrib > 0 && <> · aportes +{fmtBRL(futureContrib)}</>}
+                </span>
+                <span className="proj-note">
+                  estimativa mantendo as taxas atuais{futureContrib > 0 ? " e os aportes mensais" : ""}
+                  {rvNow > 0 ? "; renda variável mantida no valor de hoje" : ""}.
+                </span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       <div className="section-head">
         <div className="seg">
+          <button className={"seg-btn" + (tab === "resumo" ? " on" : "")} onClick={() => setTab("resumo")}>Resumo</button>
           <button className={"seg-btn" + (tab === "rf" ? " on" : "")} onClick={() => setTab("rf")}>Renda fixa</button>
           <button className={"seg-btn" + (tab === "rv" ? " on" : "")} onClick={() => setTab("rv")}>Renda variável</button>
         </div>
-        {tab === "rf" ? (
+        {tab === "rf" && (
           <button
             className="primary-btn"
-            onClick={() => setRfModal({ name: "", issuer: "", indexer: "% CDI", rate: "", applied: null, appliedDate: todayISO(), maturity: "", liquidity: "No vencimento", currentValue: null, attrs: [], notes: "" })}
+            onClick={() => setRfModal({ name: "", issuer: "", indexer: "% CDI", rate: "", applied: null, appliedDate: todayISO(), maturity: "", liquidity: "No vencimento", currentValue: null, monthly: null, monthlyDay: "", attrs: [], notes: "" })}
           >
             + Aplicação
           </button>
-        ) : (
+        )}
+        {tab === "rv" && (
           <button
             className="primary-btn"
-            onClick={() => setRvModal({ kind: "acao", ticker: "", name: "", qty: null, avgPrice: null, lastPrice: null, lastChange: null, lastUpdate: null, attrs: [], notes: "" })}
+            onClick={() => setRvModal({ kind: "acao", ticker: "", underlying: "", expiration: "", name: "", qty: null, avgPrice: null, lastPrice: null, lastChange: null, lastUpdate: null, attrs: [], notes: "" })}
           >
             + Ativo
           </button>
         )}
       </div>
 
-      {tab === "rf" ? (
+      {tab !== "rv" && (
+        <>
+        {tab === "resumo" && <div className="mini-head">Renda fixa</div>}
         <div className="card-grid">
           {data.fixed.length === 0 && <Empty>Nenhuma aplicação de renda fixa ainda.</Empty>}
           {data.fixed.map((f) => {
@@ -155,23 +282,38 @@ export default function Investments({ data, update }) {
                   <div className="asset-net">
                     líq. ≈ {fmtBRL(f.estNet)}
                     {f.estIr > 0 ? ` · IR ${String(f.estIr).replace(".", ",")}%` : " · isento de IR"}
+                    {f.estIof > 0 && ` · IOF ${String(f.estIof).replace(".", ",")}%`}
+                    {(() => {
+                      // taxa efetiva anualizada (≈, só com histórico mínimo)
+                      const days = f.appliedDate ? Math.round((new Date(todayISO()) - new Date(f.appliedDate)) / 86400000) : 0;
+                      if (days < 5 || !(f.estValue > 0) || !(f.applied > 0)) return null;
+                      const aa = (Math.pow(f.estValue / f.applied, 365 / days) - 1) * 100;
+                      if (!isFinite(aa) || aa <= 0) return null;
+                      return ` · ≈${aa.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% a.a.`;
+                    })()}
                   </div>
                 )}
                 <div className="asset-meta">
                   {f.maturity && (
-                    <span>
+                    <span className={dias != null && dias >= 0 && dias <= 30 ? "venc-alert" : undefined}>
                       Venc.: {fmtDate(f.maturity)}
                       {dias != null && dias >= 0 && <em> ({dias}d)</em>}
                     </span>
                   )}
                   {f.liquidity && <span>Liquidez: {f.liquidity}</span>}
+                  {f.monthly > 0 && <span title="Aporte mensal automático">↻ aporte {fmtBRL(f.monthly)}/mês</span>}
                 </div>
                 <AttrChips attrs={f.attrs} />
               </button>
             );
           })}
         </div>
-      ) : (
+        </>
+      )}
+
+      {tab !== "rf" && (
+        <>
+        {tab === "resumo" && <div className="mini-head">Renda variável</div>}
         <div className="card-grid">
           {data.variable.length === 0 && <Empty>Nenhum ativo de renda variável ainda.</Empty>}
           {data.variable.map((a) => {
@@ -179,7 +321,7 @@ export default function Investments({ data, update }) {
             const total = (a.qty || 0) * (price ?? a.avgPrice ?? 0);
             const cost = (a.qty || 0) * (a.avgPrice || 0);
             const pl = total - cost;
-            const manual = !API_KINDS.includes(a.kind);
+            const manual = !API_KINDS.includes(a.kind) && !isAutoOption(a);
             return (
               <div className="card asset-card clickable" key={a.id} onClick={() => setRvModal(a)} title="Editar" role="button" tabIndex={0}
                 onKeyDown={(e) => e.key === "Enter" && setRvModal(a)}>
@@ -187,7 +329,11 @@ export default function Investments({ data, update }) {
                   <span className="asset-name">{a.ticker ? a.ticker.toUpperCase() : a.name || "(sem nome)"}</span>
                   <span className="badge">{KINDS[a.kind] || a.kind}</span>
                 </div>
-                {a.name && a.ticker && <div className="asset-sub">{a.name}</div>}
+                {isAutoOption(a) ? (
+                  <div className="asset-sub">{a.underlying.toUpperCase()} · venc. {fmtDate(a.expiration)}{a.name ? ` · ${a.name}` : ""}</div>
+                ) : (
+                  a.name && a.ticker && <div className="asset-sub">{a.name}</div>
+                )}
                 <div className="price-row">
                   {manual ? (
                     <InlinePrice
@@ -223,6 +369,7 @@ export default function Investments({ data, update }) {
             );
           })}
         </div>
+        </>
       )}
 
       {rfModal && (
@@ -230,6 +377,7 @@ export default function Investments({ data, update }) {
           item={rfModal}
           onClose={() => setRfModal(null)}
           onSave={saveRf}
+          onAporte={aporteNow}
           onDelete={rfModal.id ? () => { update((d) => ({ ...d, fixed: d.fixed.filter((f) => f.id !== rfModal.id) })); setRfModal(null); } : null}
         />
       )}
@@ -245,8 +393,9 @@ export default function Investments({ data, update }) {
   );
 }
 
-function RfModal({ item, onClose, onSave, onDelete }) {
+function RfModal({ item, onClose, onSave, onAporte, onDelete }) {
   const [form, setForm] = useState({ ...item });
+  const [aporteAmt, setAporteAmt] = useState(null);
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
   const valid = form.name.trim() && form.applied > 0;
   return (
@@ -277,10 +426,11 @@ function RfModal({ item, onClose, onSave, onDelete }) {
           </select>
         </Field>
         <Field label="Taxa">
-          <input
+          <RateInput
             value={form.rate}
+            suffix={form.indexer === "% CDI" ? "% CDI" : form.indexer === "IPCA +" ? "+ IPCA" : form.indexer === "Selic +" ? "+ Selic" : "%"}
             placeholder={form.indexer === "% CDI" ? "Ex.: 105" : form.indexer === "Selic +" ? "Ex.: 0,05" : "Ex.: 6,2"}
-            onChange={(e) => set({ rate: e.target.value })}
+            onChange={(v) => set({ rate: v })}
           />
         </Field>
         <Field label="Valor aplicado (R$)">
@@ -302,6 +452,19 @@ function RfModal({ item, onClose, onSave, onDelete }) {
             ))}
           </select>
         </Field>
+        <Field label="Aporte mensal (R$, opcional)">
+          <MoneyInput value={form.monthly} onChange={(v) => set({ monthly: v })} placeholder="—" />
+        </Field>
+        <Field label="Dia do aporte">
+          <input
+            type="number"
+            min="1"
+            max="28"
+            value={form.monthlyDay || ""}
+            placeholder={form.appliedDate ? form.appliedDate.slice(8, 10) : "1"}
+            onChange={(e) => set({ monthlyDay: e.target.value })}
+          />
+        </Field>
         <Field label="Atributos extras" grow>
           <AttrEditor attrs={form.attrs} onChange={(attrs) => set({ attrs })} />
         </Field>
@@ -309,6 +472,33 @@ function RfModal({ item, onClose, onSave, onDelete }) {
           <textarea rows={2} value={form.notes || ""} onChange={(e) => set({ notes: e.target.value })} />
         </Field>
       </div>
+      {form.monthly > 0 && (
+        <p className="hint">
+          Todo mês (dia {Math.min(Math.max(parseInt(form.monthlyDay, 10) || parseInt((form.appliedDate || "").slice(8, 10), 10) || 1, 1), 28)}) será lançada
+          uma saída de {fmtBRL(form.monthly)} em Despesas (categoria Investimentos) e o valor
+          será somado ao aplicado — como uma assinatura que sai do seu saldo.
+        </p>
+      )}
+      {isIrExempt(form) ? (
+        <p className="hint">IR: isento (LCI/LCA/incentivada detectada pelo nome).</p>
+      ) : (
+        <p className="hint">IR e IOF são calculados automaticamente pelo prazo — não precisa anotar.</p>
+      )}
+      {item.id && onAporte && (
+        <div className="aporte-now">
+          <span className="field-label">Aplicar mais dinheiro agora</span>
+          <div className="aporte-now-row">
+            <MoneyInput value={aporteAmt} onChange={setAporteAmt} placeholder="R$ 0,00" />
+            <button className="primary-btn" disabled={!(aporteAmt > 0)} onClick={() => onAporte(form, aporteAmt)}>
+              + Aportar
+            </button>
+          </div>
+          <p className="hint">
+            Reinvestimento avulso: soma ao valor investido (parcela de hoje) e lança uma
+            saída em Despesas — o dinheiro sai do seu saldo. Salva também as alterações acima.
+          </p>
+        </div>
+      )}
     </Modal>
   );
 }
@@ -316,17 +506,14 @@ function RfModal({ item, onClose, onSave, onDelete }) {
 function RvModal({ item, onClose, onSave, onDelete }) {
   const [form, setForm] = useState({ ...item });
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
-  const manual = !API_KINDS.includes(form.kind);
+  const autoOpt = isAutoOption(form);
+  const manual = !API_KINDS.includes(form.kind) && !autoOpt;
   // quantidade negativa é permitida (perna vendida de trava/spread)
   const valid = (form.ticker.trim() || form.name.trim()) && form.qty != null && form.qty !== 0;
   // detecta opção cadastrada como Ação (a cotação da ação inflaria o resultado)
   const looksLikeOption =
-    !manual && /spread|call|put|trava|op[çc][ãa]o/i.test(`${form.name} ${form.notes || ""}`);
-  const setKind = (kind) => {
-    const patch = { kind };
-    if (kind === "opcao" && (!form.attrs || form.attrs.length === 0)) patch.attrs = OPTION_ATTR_SUGGESTIONS;
-    set(patch);
-  };
+    API_KINDS.includes(form.kind) && /spread|call|put|trava|op[çc][ãa]o/i.test(`${form.name} ${form.notes || ""}`);
+  const setKind = (kind) => set({ kind });
   return (
     <Modal
       title={item.id ? "Editar ativo" : "Novo ativo (renda variável)"}
@@ -348,19 +535,29 @@ function RvModal({ item, onClose, onSave, onDelete }) {
             ))}
           </select>
         </Field>
-        <Field label={form.kind === "cripto" ? "ID CoinGecko" : form.kind === "moeda" ? "Par de moedas" : "Ticker"}>
+        <Field label={form.kind === "cripto" ? "ID CoinGecko" : form.kind === "moeda" ? "Par de moedas" : form.kind === "opcao" ? "Código do contrato" : "Ticker"}>
           <input
             value={form.ticker}
             placeholder={
               form.kind === "cripto" ? "Ex.: bitcoin"
               : form.kind === "moeda" ? "Ex.: USD-BRL"
-              : form.kind === "opcao" ? "Ex.: PETRE285"
+              : form.kind === "opcao" ? "Ex.: PETRH328W2"
               : "Ex.: PETR4"
             }
             onChange={(e) => set({ ticker: e.target.value })}
             autoFocus
           />
         </Field>
+        {form.kind === "opcao" && (
+          <>
+            <Field label="Ativo-objeto">
+              <input value={form.underlying || ""} placeholder="Ex.: PETR4" onChange={(e) => set({ underlying: e.target.value })} />
+            </Field>
+            <Field label="Vencimento">
+              <input type="date" value={form.expiration || ""} onChange={(e) => set({ expiration: e.target.value })} />
+            </Field>
+          </>
+        )}
         <Field label="Nome (opcional)" grow>
           <input value={form.name} onChange={(e) => set({ name: e.target.value })} />
         </Field>
@@ -388,18 +585,29 @@ function RvModal({ item, onClose, onSave, onDelete }) {
           Ação, a cotação do papel (ex.: PETR4) seria usada como preço da sua posição.
         </p>
       )}
-      {!manual && form.kind !== "cripto" && (
+      {(form.kind === "acao" || form.kind === "fii") && (
         <p className="hint">Cotação automática via brapi.dev — configure o token em Configurações.</p>
       )}
-      {form.kind === "opcao" && (
-        <p className="hint">
-          Opções não têm cotação automática: atualize o preço direto no card.
-          Quantidade negativa = perna vendida (ex.: numa trava, compre 200 e venda −200).
-          Um spread também pode ser um único registro com o prêmio líquido como preço médio.
-        </p>
+      {form.kind === "moeda" && (
+        <p className="hint">Cotação automática via AwesomeAPI — par no formato USD-BRL, EUR-BRL…</p>
       )}
       {form.kind === "cripto" && (
         <p className="hint">Cotação automática via CoinGecko — use o ID da moeda (ex.: bitcoin, ethereum, solana).</p>
+      )}
+      {form.kind === "opcao" && (
+        autoOpt ? (
+          <p className="hint">
+            Prêmio puxado automaticamente da brapi (cadeia de opções do ativo-objeto no
+            vencimento informado). Cada perna da trava é um registro: compre com quantidade
+            positiva, venda com quantidade negativa — o resultado das pernas soma a trava.
+          </p>
+        ) : (
+          <p className="hint">
+            Preencha <b>código do contrato</b>, <b>ativo-objeto</b> e <b>vencimento</b> para
+            cotação automática (funciona para PETR4 no plano grátis da brapi). Sem isso, o
+            preço fica manual (campo tracejado no card). Perna vendida = quantidade negativa.
+          </p>
+        )
       )}
     </Modal>
   );

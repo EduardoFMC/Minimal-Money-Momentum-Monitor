@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { loadData, saveData, isTauri } from "./backend";
-import { migrate, launchRecurring, upsertHistory } from "./model";
+import { migrate, launchRecurring, applyMonthlyContributions, upsertHistory } from "./model";
 import { applyTheme } from "./theme";
 import { refreshItems, hasApiItems } from "./quotes";
 import { estimateFixedAssets, isEstimable } from "./fixedIncome";
@@ -32,8 +32,9 @@ function mergeEstimates(cur, updated) {
   const m = new Map(updated.map((f) => [f.id, f]));
   return cur.map((c) => {
     const u = m.get(c.id);
-    return u && u.estDate !== c.estDate
-      ? { ...c, estValue: u.estValue, estNet: u.estNet, estIr: u.estIr, estDate: u.estDate }
+    // aplica quando a data OU o valor OU a versão da lógica mudou
+    return u && (u.estDate !== c.estDate || u.estValue !== c.estValue || u.estVer !== c.estVer)
+      ? { ...c, estValue: u.estValue, estNet: u.estNet, estIr: u.estIr, estIof: u.estIof, estDate: u.estDate, estVer: u.estVer }
       : c;
   });
 }
@@ -44,6 +45,7 @@ export default function App() {
   const [tab, setTab] = useState("despesas");
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
   const [refreshing, setRefreshing] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState(null); // última atualização de cotações
   const [toast, setToast] = useState("");
   const dirty = useRef(false);
   const dataRef = useRef(null);
@@ -157,6 +159,7 @@ export default function App() {
         )
       );
       lastRefreshAt.current = Date.now();
+      setUpdatedAt(new Date());
       const errors = [...new Set([...rv.errors, ...rw.errors, ...fx.errors])];
       if (errors.length) {
         const msg = errors.join(" · ");
@@ -177,18 +180,24 @@ export default function App() {
   useEffect(() => {
     if (data && !autoRefreshed.current) {
       autoRefreshed.current = true;
-      const launched = launchRecurring(data, todayISO());
+      let working = data;
+      const notes = [];
+      const launched = launchRecurring(working, todayISO());
       if (launched) {
-        update(() => launched.data);
-        if (launched.count > 0) {
-          showToast(
-            launched.count === 1
-              ? "1 assinatura lançada automaticamente neste mês."
-              : `${launched.count} assinaturas lançadas automaticamente neste mês.`
-          );
-        }
+        working = launched.data;
+        if (launched.count > 0) notes.push(launched.count === 1 ? "1 assinatura lançada" : `${launched.count} assinaturas lançadas`);
       }
-      update((cur) => upsertHistory(cur, todayISO()));
+      const invested = applyMonthlyContributions(working, todayISO());
+      if (invested) {
+        working = invested.data;
+        if (invested.count > 0) notes.push(invested.count === 1 ? "1 aporte mensal lançado" : `${invested.count} aportes mensais lançados`);
+      }
+      working = upsertHistory(working, todayISO());
+      if (working !== data) {
+        dataRef.current = working; // para o refresh já usar o estado novo
+        update(() => working);
+      }
+      if (notes.length) showToast(notes.join(" · ") + " neste mês.");
       refreshQuotes(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -256,10 +265,15 @@ export default function App() {
           ))}
         </nav>
         <div className="topbar-right">
+          {updatedAt && (
+            <span className="upd-time" title="Última atualização das cotações">
+              {updatedAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+            </span>
+          )}
           <button
             className={"icon-btn refresh" + (refreshing ? " spinning" : "")}
             title="Atualizar cotações"
-            onClick={refreshQuotes}
+            onClick={() => refreshQuotes()}
             disabled={refreshing}
           >
             ↻

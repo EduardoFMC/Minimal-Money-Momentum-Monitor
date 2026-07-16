@@ -55,6 +55,29 @@ export function MoneyInput({ value, onChange, placeholder = "0,00", ...rest }) {
   );
 }
 
+// Máscara de taxa/percentual: só dígitos e uma vírgula decimal (aceita ponto
+// como vírgula). Guarda a string limpa — "102", "0,07", "13,5". Não usa o
+// preenchimento à direita do dinheiro porque taxas são digitadas por extenso.
+export function RateInput({ value, onChange, suffix = "%", ...rest }) {
+  const [text, setText] = useState(value == null ? "" : String(value).replace(".", ","));
+  useEffect(() => {
+    setText(value == null || value === "" ? "" : String(value).replace(".", ","));
+  }, [value]);
+  const handle = (raw) => {
+    let t = raw.replace(/\./g, ",").replace(/[^\d,]/g, "");
+    const i = t.indexOf(",");
+    if (i !== -1) t = t.slice(0, i + 1) + t.slice(i + 1).replace(/,/g, ""); // uma vírgula só
+    setText(t);
+    onChange(t);
+  };
+  return (
+    <span className="rate-input">
+      <input type="text" inputMode="decimal" value={text} onChange={(e) => handle(e.target.value)} {...rest} />
+      {suffix && <span className="rate-suffix">{suffix}</span>}
+    </span>
+  );
+}
+
 // Input numérico livre (quantidades, que podem ter várias casas ou ser
 // negativas para pernas vendidas). Aceita vírgula ou ponto decimal.
 export function NumInput({ value, onChange, placeholder = "0,00", ...rest }) {
@@ -177,12 +200,46 @@ export function InlinePrice({ value, onSave }) {
   );
 }
 
-// Seletor pesquisável: campo de busca + lista alfabética rolável
-// (aprox. 10 itens visíveis). Usado nas categorias.
+// Seletor pesquisável: campo de busca + lista alfabética rolável (aprox. 10
+// itens visíveis). A lista usa position:fixed para NÃO ser cortada por
+// ancestrais com overflow (modal, área de conteúdo rolável).
 export function SearchSelect({ options, value, onChange, emptyLabel = null, placeholder = "Pesquisar…" }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
+  const [coords, setCoords] = useState(null);
   const boxRef = useRef(null);
+  const inputRef = useRef(null);
+
+  const updateCoords = () => {
+    const el = inputRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - r.bottom;
+    const spaceAbove = r.top;
+    const up = spaceBelow < 240 && spaceAbove > spaceBelow;
+    const maxH = Math.max(120, Math.min(272, (up ? spaceAbove : spaceBelow) - 12));
+    setCoords({
+      left: r.left,
+      width: r.width,
+      top: up ? undefined : r.bottom + 2,
+      bottom: up ? window.innerHeight - r.top + 2 : undefined,
+      maxH,
+    });
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    updateCoords();
+    const on = () => updateCoords();
+    // captura para pegar rolagem de qualquer ancestral (modal, conteúdo)
+    window.addEventListener("scroll", on, true);
+    window.addEventListener("resize", on);
+    return () => {
+      window.removeEventListener("scroll", on, true);
+      window.removeEventListener("resize", on);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   useEffect(() => {
     const onDoc = (e) => {
@@ -207,6 +264,7 @@ export function SearchSelect({ options, value, onChange, emptyLabel = null, plac
   return (
     <div className="search-select" ref={boxRef}>
       <input
+        ref={inputRef}
         value={open ? q : sel ? sel.name : emptyLabel || ""}
         placeholder={sel ? sel.name : emptyLabel || placeholder}
         onFocus={() => {
@@ -222,8 +280,11 @@ export function SearchSelect({ options, value, onChange, emptyLabel = null, plac
           if (e.key === "Escape") setOpen(false);
         }}
       />
-      {open && (
-        <div className="ss-list">
+      {open && coords && (
+        <div
+          className="ss-list"
+          style={{ position: "fixed", left: coords.left, width: coords.width, top: coords.top, bottom: coords.bottom, maxHeight: coords.maxH }}
+        >
           {emptyLabel != null && !q.trim() && (
             <button type="button" className={"ss-item" + (!value ? " on" : "")} onMouseDown={() => pick("")}>
               {emptyLabel}

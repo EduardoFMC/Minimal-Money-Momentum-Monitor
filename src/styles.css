@@ -82,6 +82,9 @@ input, textarea { user-select: text; }
 .tab.gear { font-size: 14px; padding: 4px 8px; }
 
 .topbar-right { display: flex; align-items: center; gap: 8px; }
+.upd-time { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.venc-alert { color: #eab308; font-weight: 600; }
+.venc-alert em { color: #eab308 !important; }
 
 .save-dot {
   width: 8px; height: 8px; border-radius: 50%;
@@ -325,6 +328,52 @@ button:disabled { opacity: 0.45; cursor: default; }
 
 .asset-net { font-size: 11px; color: var(--muted); }
 
+/* títulos das seções dentro do Resumo de investimentos */
+.aporte-now {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.aporte-now-row { display: flex; gap: 6px; align-items: center; }
+.aporte-now-row > :first-child { flex: 1; }
+
+.proj-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.proj-summary b { font-size: 13px; }
+.proj-note { color: var(--muted); font-size: 10px; }
+
+.mini-head {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+  margin-top: 2px;
+}
+
+/* campo de taxa com sufixo (% CDI, + IPCA…) */
+.rate-input { position: relative; display: block; }
+.rate-input input { padding-right: 52px; }
+.rate-suffix {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
 /* ===== Despesas ===== */
 .month-nav { display: flex; align-items: center; gap: 4px; }
 .month-label { font-weight: 700; font-size: 14px; min-width: 130px; text-align: center; }
@@ -336,20 +385,16 @@ button:disabled { opacity: 0.45; cursor: default; }
 /* ===== Seletor pesquisável (categorias) ===== */
 .search-select { position: relative; }
 .ss-list {
-  position: absolute;
-  top: calc(100% + 3px);
-  left: 0;
-  right: 0;
-  z-index: 60;
+  /* posição (fixed) e maxHeight vêm inline do componente para não ser
+     cortada por ancestrais com overflow (modal, conteúdo) */
+  z-index: 200;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  /* ~10 itens visíveis, o resto rola */
-  max-height: 272px;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
 }
 .ss-item {
   display: flex;
