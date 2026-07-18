@@ -12,7 +12,26 @@ Todos os dados ficam **100% locais**, num único arquivo JSON.
 | **Despesas** | Entradas e saídas estilo app de banco: categorias, busca, filtro de assinaturas, gráfico por categoria (rosca), gasto por semana e entradas × saídas por mês. Assinaturas marcadas com ↻ são **lançadas automaticamente** a cada mês novo. Importação de **extrato OFX** com categoria sugerida e deduplicação. |
 | **Investimentos** | **Renda fixa** (CDB, LCI, Tesouro Direto…) com **valor atual estimado automaticamente** via CDI/Selic/IPCA do Banco Central (bruto + líquido de IR; LCI/LCA isentas). **Renda variável** (ações, FIIs, cripto, moedas, opções) com quantidade, preço médio e P/L. Quantidade negativa = perna vendida (travas/spreads). Aba **Resumo** com gráfico de **evolução do patrimônio reconstruída desde o 1º investimento** (via séries do Banco Central) e **projeção do futuro** (1/3/5/10 anos) separando rendimento de aportes. |
 | **Monitoramento** | Watchlist do que você ainda não comprou: ações, cripto, dólar/moedas, CDBs de outras corretoras… com preço-alvo e alerta visual quando atingido. |
-| **⚙ Configurações** | Paleta de cores customizável (presets + cor a cor, estilo Fan Control), token da brapi, categorias, backup. |
+| **⚙ Configurações** | Paleta de cores customizável (presets + cor a cor, estilo Fan Control), token da brapi, categorias, backup, alertas/bandeja e proteção por PIN. |
+
+### Ciclo 2 (jul/2026)
+
+- **Importação CSV do Inter**: extrato da conta em CSV (além do OFX) — calibrado no formato
+  real (`Data Lançamento;Histórico;Descrição;Valor;Saldo`). Lançamentos de investimento
+  (aplicações, resgates, BM&F) e pagamentos de fatura são pulados automaticamente para não
+  duplicar com a aba Investimentos. Fatura do cartão em CSV com parser tolerante.
+- **Relatório mensal**: na virada do mês abre um resumo do mês fechado (entradas/saídas/saldo,
+  comparação com a média dos 3 meses anteriores, top categorias, onde você mais gastou,
+  assinaturas, aportes e patrimônio). Também disponível no botão "Relatório" das Despesas.
+- **Bandeja + alertas nativos**: ícone na bandeja (Abrir / Atualizar cotações / Sair). Por
+  padrão o X fecha o app; com "manter na bandeja" (⚙) o X esconde a janela e as cotações
+  seguem atualizando (tick de 60s vindo do Rust, imune ao throttling do WebView2).
+  Notificações do Windows para: preço-alvo atingido, variação diária forte (limiar em ⚙) e
+  vencimento de renda fixa (30/7/1 dia) — no máximo 1 por ativo/tipo por dia.
+- **Proteção por PIN**: opcional (⚙ → Segurança). O data.json (com o token da brapi) é
+  cifrado com AES-256-GCM (chave via PBKDF2-SHA256, 600 mil iterações); o app pede o PIN ao
+  abrir. Backups automáticos ficam cifrados; o backup exportado manualmente sai decifrado.
+  **Sem o PIN não há recuperação.**
 
 Todo ativo aceita **atributos extras** livres (chave → valor), tipo ficha de personagem —
 útil para strike/vencimento de opções, taxa de CDB monitorado etc.

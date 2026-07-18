@@ -1,16 +1,18 @@
 import React, { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { loadData, saveData, isTauri } from "./backend";
+import { loadData, saveData, notify, unlockPin, isTauri } from "./backend";
+import { checkAlerts } from "./alerts";
 import { migrate, launchRecurring, applyMonthlyContributions, upsertHistory } from "./model";
 import { applyTheme } from "./theme";
 import { refreshItems, hasApiItems } from "./quotes";
 import { estimateFixedAssets, isEstimable } from "./fixedIncome";
-import { todayISO } from "./format";
+import { todayISO, addMonths } from "./format";
 import Expenses from "./components/Expenses";
 import Investments from "./components/Investments";
 import Monitoring from "./components/Monitoring";
 import Settings from "./components/Settings";
+import Report from "./components/Report";
 
 const TABS = [
   { id: "despesas", label: "Despesas" },
@@ -42,10 +44,15 @@ function mergeEstimates(cur, updated) {
 export default function App() {
   const [data, setData] = useState(null);
   const [loadError, setLoadError] = useState(null);
+  const [locked, setLocked] = useState(false);
+  const [pinInput, setPinInput] = useState("");
+  const [pinError, setPinError] = useState("");
+  const [unlocking, setUnlocking] = useState(false);
   const [tab, setTab] = useState("despesas");
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
   const [refreshing, setRefreshing] = useState(false);
   const [updatedAt, setUpdatedAt] = useState(null); // última atualização de cotações
+  const [reportMonth, setReportMonth] = useState(null); // "YYYY-MM" com o relatório aberto
   const [toast, setToast] = useState("");
   const dirty = useRef(false);
   const dataRef = useRef(null);
@@ -67,12 +74,32 @@ export default function App() {
   // (senão uma falha transitória de leitura pareceria perda total)
   useEffect(() => {
     loadData()
-      .then((raw) => setData(migrate(raw)))
+      .then((raw) => {
+        if (raw && raw.m4Encrypted) setLocked(true);
+        else setData(migrate(raw));
+      })
       .catch((e) => {
         console.error(e);
         setLoadError(String(e.message || e));
       });
   }, []);
+
+  const doUnlock = async () => {
+    const pin = pinInput.trim();
+    if (!pin || unlocking) return;
+    setUnlocking(true);
+    setPinError("");
+    try {
+      const raw = await unlockPin(pin);
+      setData(migrate(raw));
+      setLocked(false);
+      setPinInput("");
+    } catch (e) {
+      setPinError(String(e.message || e));
+    } finally {
+      setUnlocking(false);
+    }
+  };
 
   // salva com debounce a cada alteração
   useEffect(() => {
@@ -96,7 +123,7 @@ export default function App() {
   // ao fechar a janela, grava o que estiver pendente antes de encerrar
   useEffect(() => {
     if (!isTauri) return;
-    let un;
+    const uns = [];
     listen("app-close-requested", async () => {
       try {
         if (changeSeq.current > savedSeq.current && dataRef.current) {
@@ -108,9 +135,26 @@ export default function App() {
       } finally {
         invoke("confirm_close");
       }
-    }).then((u) => (un = u));
-    return () => un && un();
+    }).then((u) => uns.push(u));
+    // menu da bandeja: "Atualizar cotações"
+    listen("refresh-request", () => refreshRef.current()).then((u) => uns.push(u));
+    // tick de 60s do Rust (funciona com a janela escondida na bandeja)
+    listen("refresh-tick", () => {
+      const min = dataRef.current?.settings?.autoRefreshMin ?? 5;
+      if (min > 0 && Date.now() - lastRefreshAt.current >= min * 60000) {
+        refreshRef.current(true);
+      }
+    }).then((u) => uns.push(u));
+    return () => uns.forEach((u) => u && u());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // informa o Rust sobre o comportamento do X (bandeja × fechar)
+  const trayMode = data?.settings?.trayMode === true;
+  useEffect(() => {
+    if (!isTauri || data == null) return;
+    invoke("set_tray_mode", { enabled: trayMode }).catch(() => {});
+  }, [trayMode, data == null]);
 
   // aplica o tema
   useEffect(() => {
@@ -160,6 +204,21 @@ export default function App() {
       );
       lastRefreshAt.current = Date.now();
       setUpdatedAt(new Date());
+      // alertas nativos sobre os dados recém-atualizados (1x/dia/item)
+      const merged = {
+        ...d,
+        variable: mergePrices(d.variable, rv.items),
+        watchlist: mergePrices(d.watchlist, rw.items),
+        fixed: fx.updates ? mergeEstimates(d.fixed, fx.updates) : d.fixed,
+      };
+      const al = checkAlerts(merged, d.settings, todayISO());
+      if (al.notifications.length) {
+        al.notifications.forEach((n) => notify(n.title, n.body));
+        update((cur) => ({
+          ...cur,
+          settings: { ...cur.settings, notifiedAlerts: [...(cur.settings.notifiedAlerts || []), ...al.keys].slice(-300) },
+        }));
+      }
       const errors = [...new Set([...rv.errors, ...rw.errors, ...fx.errors])];
       if (errors.length) {
         const msg = errors.join(" · ");
@@ -193,6 +252,12 @@ export default function App() {
         if (invested.count > 0) notes.push(invested.count === 1 ? "1 aporte mensal lançado" : `${invested.count} aportes mensais lançados`);
       }
       working = upsertHistory(working, todayISO());
+      // relatório do mês que fechou (uma vez por virada de mês)
+      const prevMonth = addMonths(todayISO().slice(0, 7), -1);
+      if ((working.settings.lastReportMonth || "") < prevMonth && working.expenses.some((t) => t.date.slice(0, 7) === prevMonth)) {
+        setReportMonth(prevMonth);
+        working = { ...working, settings: { ...working.settings, lastReportMonth: prevMonth } };
+      }
       if (working !== data) {
         dataRef.current = working; // para o refresh já usar o estado novo
         update(() => working);
@@ -234,6 +299,27 @@ export default function App() {
     return () => window.removeEventListener("focus", onFocus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  if (locked)
+    return (
+      <div className="loading lock-screen">
+        <span className="logo big">M⁴</span>
+        <h2>Dados protegidos por PIN</h2>
+        <input
+          type="password"
+          className="pin-input"
+          placeholder="PIN"
+          value={pinInput}
+          autoFocus
+          onChange={(e) => setPinInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && doUnlock()}
+        />
+        {pinError && <p className="pin-error">{pinError}</p>}
+        <button className="primary-btn" disabled={unlocking || !pinInput.trim()} onClick={doUnlock}>
+          {unlocking ? "Verificando…" : "Desbloquear"}
+        </button>
+      </div>
+    );
 
   if (loadError)
     return (
@@ -289,11 +375,13 @@ export default function App() {
       </header>
 
       <main className="content">
-        {tab === "despesas" && <Expenses data={data} update={update} />}
+        {tab === "despesas" && <Expenses data={data} update={update} onReport={setReportMonth} />}
         {tab === "investimentos" && <Investments data={data} update={update} />}
         {tab === "monitoramento" && <Monitoring data={data} update={update} />}
         {tab === "config" && <Settings data={data} update={update} />}
       </main>
+
+      {reportMonth && <Report data={data} month={reportMonth} onClose={() => setReportMonth(null)} />}
 
       {toast && <div className="toast">{toast}</div>}
     </div>

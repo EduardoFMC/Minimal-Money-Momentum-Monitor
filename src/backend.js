@@ -1,6 +1,11 @@
 // Ponte com o backend Tauri. Fora do Tauri (ex.: navegador durante o
 // desenvolvimento) usa localStorage e fetch direto como fallback.
 import { invoke } from "@tauri-apps/api/core";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 
 export const isTauri = typeof window !== "undefined" && !!window.__TAURI_INTERNALS__;
 
@@ -66,6 +71,48 @@ export async function importBackup() {
 export async function dataFilePath() {
   if (isTauri) return await invoke("data_file_path");
   return "localStorage do navegador (modo de desenvolvimento)";
+}
+
+// ===== Proteção com PIN (arquivo cifrado no disco) =====
+export async function isEncrypted() {
+  if (!isTauri) return false;
+  return await invoke("is_encrypted");
+}
+
+export async function unlockPin(pin) {
+  const s = await invoke("unlock", { pin });
+  return JSON.parse(s);
+}
+
+export async function setPin(pin, data) {
+  await invoke("set_pin", { pin, contents: JSON.stringify(data) });
+}
+
+export async function clearPin(pin, data) {
+  await invoke("clear_pin", { pin, contents: JSON.stringify(data) });
+}
+
+// Notificação nativa do sistema (Windows toast). No navegador usa a
+// Notification API; sem permissão, cai no console.
+export async function notify(title, body) {
+  try {
+    if (isTauri) {
+      let ok = await isPermissionGranted();
+      if (!ok) ok = (await requestPermission()) === "granted";
+      if (ok) sendNotification({ title, body });
+      return;
+    }
+    if (typeof Notification !== "undefined") {
+      if (Notification.permission === "default") await Notification.requestPermission();
+      if (Notification.permission === "granted") {
+        new Notification(title, { body });
+        return;
+      }
+    }
+    console.log("[notificação]", title, "—", body);
+  } catch (e) {
+    console.warn("notify falhou:", e);
+  }
 }
 
 // Seleciona um extrato .ofx e devolve o texto bruto (null se cancelado).

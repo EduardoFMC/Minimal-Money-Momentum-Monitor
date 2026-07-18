@@ -55,6 +55,10 @@ export function defaultData() {
       autoLaunched: [],    // controle das assinaturas já lançadas ("2026-08|spotify|assinaturas|out")
       autoInvested: [],    // controle dos aportes mensais já lançados ("2026-08|<idAtivo>")
       importedFitids: [],  // FITIDs de extratos OFX já importados (deduplicação)
+      notifiedAlerts: [],  // alertas já notificados ("2026-07-16|<id>|target")
+      alertMovePct: 5,     // variação diária (%) que dispara alerta
+      trayMode: false,     // X esconde para a bandeja em vez de fechar
+      lastReportMonth: "", // último relatório mensal já exibido ("2026-06")
     },
     categories: DEFAULT_CATEGORIES,
     expenses: [],   // { id, date, desc, catId, amount, type: "in"|"out", recurring, auto?, aporte? }
@@ -75,10 +79,12 @@ export function migrate(raw) {
   for (const k of ["categories", "expenses", "fixed", "variable", "watchlist", "history"]) {
     if (!Array.isArray(d[k])) d[k] = base[k];
   }
-  for (const k of ["autoLaunched", "autoInvested", "importedFitids"]) {
+  for (const k of ["autoLaunched", "autoInvested", "importedFitids", "notifiedAlerts"]) {
     if (!Array.isArray(d.settings[k])) d.settings[k] = [];
   }
   if (typeof d.settings.autoRefreshMin !== "number") d.settings.autoRefreshMin = 5;
+  if (!(Number(d.settings.alertMovePct) > 0)) d.settings.alertMovePct = 5;
+  if (typeof d.settings.lastReportMonth !== "string") d.settings.lastReportMonth = "";
   if (d.categories.length === 0) d.categories = DEFAULT_CATEGORIES;
   d.version = 2;
   return d;

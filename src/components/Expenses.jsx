@@ -16,7 +16,7 @@ function isoOf(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-export default function Expenses({ data, update }) {
+export default function Expenses({ data, update, onReport }) {
   const [month, setMonth] = useState(monthKey(todayISO()));
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("");
@@ -133,9 +133,12 @@ export default function Expenses({ data, update }) {
           <span className="month-label">{monthLabel(month)}</span>
           <button className="icon-btn" onClick={() => setMonth(addMonths(month, 1))}>›</button>
         </div>
-        <button className="primary-btn" onClick={() => setModal({ type: "out", amount: null, desc: "", catId: cats[0]?.id || "", date: todayISO(), recurring: false })}>
-          + Transação
-        </button>
+        <div className="btn-row">
+          <button className="ghost-btn" onClick={() => onReport && onReport(month)}>Relatório</button>
+          <button className="primary-btn" onClick={() => setModal({ type: "out", amount: null, desc: "", catId: cats[0]?.id || "", date: todayISO(), recurring: false })}>
+            + Transação
+          </button>
+        </div>
       </div>
 
       <div className="summary-row">

@@ -27,6 +27,8 @@ export function parseOfx(text) {
 }
 
 const RULES = [
+  // estabelecimentos frequentes do extrato real (Inter/Brasília)
+  [/taco de ouro|porks|malibu/i, "alimentacao"],
   [/uber|99 ?(app|pop)|taxi|cabify|metr[oô]|onibus|ônibus|\bbrt\b|estacionamento|\bposto\b|combust|gasolina|ipiranga|shell\b|pedagio|pedágio/i, "transporte"],
   [/ifood|rappi|restaurante|lanchonete|pizzaria|pizza|burguer|burger|hamburg|padaria|caf[eé]\b|mcdonald|\bbk\b|subway|churrasc/i, "alimentacao"],
   [/mercado|supermerc|carrefour|assai|assaí|atacad|extra\b|p[aã]o de a[çc][uú]car|hortifruti|sacol[aã]o|hipermercado/i, "mercado"],
