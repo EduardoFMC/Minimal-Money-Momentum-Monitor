@@ -191,15 +191,19 @@ export default function Investments({ data, update }) {
         // projeção: separa rendimento de novos aportes
         const futureContrib = curve ? Math.max(0, curve.principalHorizon - curve.principalNow) : 0;
         const projReturn = lastVal - nowVal - futureContrib;
+        const gainPct = rf.applied + rv.cost > 0 ? (gainNow / (rf.applied + rv.cost)) * 100 : null;
         return (
           <div className="card">
             <div className="chart-head">
-              <h4>
-                Patrimônio
-                <span className={"h4-extra " + (gainNow >= 0 ? "pos" : "neg")} title="Valor atual menos tudo o que você investiu">
-                  ganho {gainNow >= 0 ? "+" : ""}{fmtBRL(gainNow)} desde {firstLabel}
-                </span>
-              </h4>
+              <div className="patrim-head">
+                <span className="stat-label">Evolução do patrimônio</span>
+                <div className={"patrim-gain " + (gainNow >= 0 ? "pos" : "neg")} title="Valor atual menos tudo o que você investiu (não conta aportes como ganho)">
+                  <span className="patrim-gain-arrow">{gainNow >= 0 ? "▲" : "▼"}</span>
+                  {gainNow >= 0 ? "+" : ""}{fmtBRL(gainNow)}
+                  {gainPct != null && <span className="patrim-gain-pct">({fmtPct(gainPct)})</span>}
+                  <span className="patrim-since">ganho desde {firstLabel}</span>
+                </div>
+              </div>
               <div className="seg mini">
                 {HORIZONS.map((hz) => (
                   <button key={hz.mo} className={"seg-btn" + (horizon === hz.mo ? " on" : "")} onClick={() => setHorizon(hz.mo)}>
@@ -260,7 +264,15 @@ export default function Investments({ data, update }) {
             // valor manual tem prioridade; senão usa a estimativa via BCB
             const isEst = f.currentValue == null && f.estValue != null;
             const val = f.currentValue ?? f.estValue;
-            const rend = val != null && f.applied ? val - f.applied : null;
+            const grossRend = val != null && f.applied ? val - f.applied : null;
+            const netVal = isEst && f.estNet != null ? f.estNet : null;
+            const netRend = netVal != null && f.applied ? netVal - f.applied : null;
+            const taxed = isEst && f.estNet != null && (f.estIr > 0 || f.estIof > 0);
+            const pctOf = (x) => (f.applied > 0 ? fmtPct((x / f.applied) * 100) : "");
+            // taxa efetiva anualizada (≈, só com histórico mínimo)
+            const days = f.appliedDate ? Math.round((new Date(todayISO()) - new Date(f.appliedDate)) / 86400000) : 0;
+            const aa = isEst && days >= 5 && f.estValue > 0 && f.applied > 0 ? (Math.pow(f.estValue / f.applied, 365 / days) - 1) * 100 : null;
+            const aaStr = aa != null && isFinite(aa) && aa > 0 ? ` · ≈${aa.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% a.a.` : "";
             return (
               <button className="card asset-card" key={f.id} onClick={() => setRfModal(f)} title="Editar">
                 <div className="card-top">
@@ -268,30 +280,41 @@ export default function Investments({ data, update }) {
                   <span className="badge">{rateLabel(f.indexer, f.rate)}</span>
                 </div>
                 {f.issuer && <div className="asset-sub">{f.issuer}</div>}
-                <div className="asset-value" title={isEst ? "Estimativa bruta via CDI/Selic/IPCA do Banco Central" : undefined}>
+                <div className="asset-value" title={isEst ? "Valor bruto estimado via CDI/Selic/IPCA do Banco Central" : undefined}>
                   {isEst && "≈ "}
                   {fmtBRL(val ?? f.applied)}
                 </div>
-                {rend != null && (
-                  <div className={"asset-pl " + (rend >= 0 ? "pos" : "neg")}>
-                    {isEst && "≈ "}
-                    {fmtBRL(rend)} {f.applied > 0 && <small>({fmtPct((rend / f.applied) * 100)})</small>}
-                  </div>
-                )}
-                {isEst && f.estNet != null && (
-                  <div className="asset-net">
-                    líq. ≈ {fmtBRL(f.estNet)}
-                    {f.estIr > 0 ? ` · IR ${String(f.estIr).replace(".", ",")}%` : " · isento de IR"}
-                    {f.estIof > 0 && ` · IOF ${String(f.estIof).replace(".", ",")}%`}
-                    {(() => {
-                      // taxa efetiva anualizada (≈, só com histórico mínimo)
-                      const days = f.appliedDate ? Math.round((new Date(todayISO()) - new Date(f.appliedDate)) / 86400000) : 0;
-                      if (days < 5 || !(f.estValue > 0) || !(f.applied > 0)) return null;
-                      const aa = (Math.pow(f.estValue / f.applied, 365 / days) - 1) * 100;
-                      if (!isFinite(aa) || aa <= 0) return null;
-                      return ` · ≈${aa.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}% a.a.`;
-                    })()}
-                  </div>
+                {isEst && f.estNet != null ? (
+                  taxed ? (
+                    <div className="yields">
+                      <div className="yield-row">
+                        <span className="yield-lbl">Bruto</span>
+                        <span className={grossRend >= 0 ? "pos" : "neg"}>{grossRend >= 0 ? "+" : ""}{fmtBRL(grossRend)} <small>({pctOf(grossRend)})</small></span>
+                      </div>
+                      <div className="yield-row">
+                        <span className="yield-lbl">Líquido</span>
+                        <span className={netRend >= 0 ? "pos" : "neg"}>{netRend >= 0 ? "+" : ""}{fmtBRL(netRend)} <small>({pctOf(netRend)})</small></span>
+                      </div>
+                      <div className="asset-tax">
+                        se resgatar hoje: −IR {String(f.estIr).replace(".", ",")}%
+                        {f.estIof > 0 && ` · −IOF ${String(f.estIof).replace(".", ",")}%`}
+                        {aaStr}
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className={"asset-pl " + (grossRend >= 0 ? "pos" : "neg")}>
+                        {grossRend >= 0 ? "+" : ""}{fmtBRL(grossRend)} <small>({pctOf(grossRend)})</small>
+                      </div>
+                      <div className="asset-tax">líquido = bruto · isento de IR{aaStr}</div>
+                    </>
+                  )
+                ) : (
+                  grossRend != null && (
+                    <div className={"asset-pl " + (grossRend >= 0 ? "pos" : "neg")}>
+                      {isEst && "≈ "}{grossRend >= 0 ? "+" : ""}{fmtBRL(grossRend)} <small>({pctOf(grossRend)})</small>
+                    </div>
+                  )
                 )}
                 <div className="asset-meta">
                   {f.maturity && (

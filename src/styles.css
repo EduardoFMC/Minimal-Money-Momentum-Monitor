@@ -328,6 +328,27 @@ button:disabled { opacity: 0.45; cursor: default; }
 
 .asset-net { font-size: 11px; color: var(--muted); }
 
+/* rendimento bruto x líquido (renda fixa) */
+.yields { display: flex; flex-direction: column; gap: 1px; }
+.yield-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 13px; font-weight: 600; }
+.yield-row.single { font-weight: 600; }
+.yield-lbl {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.yield-row small { font-weight: 400; }
+.asset-tax { font-size: 10px; color: var(--muted); margin-top: 1px; }
+
+/* cabeçalho do gráfico de patrimônio (separa título e ganho) */
+.patrim-head { display: flex; flex-direction: column; gap: 3px; }
+.patrim-gain { display: flex; align-items: baseline; gap: 6px; font-size: 15px; font-weight: 700; flex-wrap: wrap; }
+.patrim-gain-arrow { font-size: 11px; }
+.patrim-gain-pct { font-weight: 400; font-size: 12px; }
+.patrim-since { font-size: 11px; font-weight: 400; color: var(--muted); }
+
 /* títulos das seções dentro do Resumo de investimentos */
 .aporte-now {
   margin-top: 10px;
