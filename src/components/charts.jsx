@@ -54,12 +54,14 @@ export function Donut({ entries, size = 120, thickness = 16 }) {
 
 // Linha/área para séries temporais (ex.: evolução do patrimônio).
 // Pontos com `future: true` são desenhados tracejados (projeção).
-export function LineChart({ points, height = 90 }) {
+// refValue (opcional) desenha uma linha horizontal de meta.
+export function LineChart({ points, height = 90, refValue = null, refLabel = "meta" }) {
   if (!points.length) return null;
   const w = 600;
   const h = height;
   const pad = 8;
   const vals = points.map((p) => p.value);
+  if (refValue != null && isFinite(refValue)) vals.push(refValue);
   const min = Math.min(...vals);
   const max = Math.max(...vals);
   const span = max - min || Math.max(max, 1) * 0.01;
@@ -89,6 +91,16 @@ export function LineChart({ points, height = 90 }) {
         )}
         {hasFuture && (
           <line x1={x(boundary).toFixed(1)} y1={pad} x2={x(boundary).toFixed(1)} y2={h - pad} stroke="var(--border)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        )}
+        {refValue != null && isFinite(refValue) && (
+          <>
+            <line x1={pad} y1={y(refValue).toFixed(1)} x2={w - pad} y2={y(refValue).toFixed(1)} stroke="var(--pos)" strokeWidth="1" strokeDasharray="6 4" vectorEffect="non-scaling-stroke" opacity="0.8">
+              <title>{`${refLabel}: ${fmtBRL(refValue)}`}</title>
+            </line>
+            <text x={w - pad - 2} y={Math.max(10, y(refValue) - 3).toFixed(1)} textAnchor="end" className="chart-ref-label">
+              {refLabel}
+            </text>
+          </>
         )}
         {points.map((p, i) => (
           <circle key={i} cx={x(i)} cy={y(p.value)} r={p.future ? 1.8 : 2.3} fill="var(--accent)" opacity={p.future ? 0.75 : 1}>

@@ -92,6 +92,45 @@ export function parseInterCsv(text) {
   return { txs, skippedInvest, skippedFatura };
 }
 
+// Deduplicação da importação. OFX usa FITID (id único do banco). CSV não tem
+// id, então usa CONTAGEM por assinatura data|valor|descrição: se o arquivo
+// tem 2 compras idênticas no mesmo dia (ex.: dois lanches de R$ 10,00) e o
+// app já tem 0, importa as duas; na reimportação (já tem 2), importa zero.
+// Retorna { fresh, newIds, dup }.
+export function dedupeTxs(txs, existingExpenses, importedFitids) {
+  const seenIds = new Set(importedFitids || []);
+  const sigOf = (t) => `${t.date}|${t.amount}|${normalizeDesc(t.desc).toLowerCase()}`;
+  const avail = new Map();
+  for (const t of existingExpenses) {
+    const s = sigOf(t);
+    avail.set(s, (avail.get(s) || 0) + 1);
+  }
+  const fresh = [];
+  const newIds = [];
+  let dup = 0;
+  for (const t of txs) {
+    if (t.fitid) {
+      if (seenIds.has(t.fitid)) {
+        dup++;
+        continue;
+      }
+      seenIds.add(t.fitid);
+      newIds.push(t.fitid);
+      fresh.push(t);
+      continue;
+    }
+    const s = sigOf(t);
+    const c = avail.get(s) || 0;
+    if (c > 0) {
+      avail.set(s, c - 1);
+      dup++;
+      continue;
+    }
+    fresh.push(t);
+  }
+  return { fresh, newIds, dup };
+}
+
 // Fatura do cartão de crédito (tolerante: detecta separador e colunas pelo
 // cabeçalho). Compras = saída; pagamentos/estornos são pulados.
 // Retorna { txs, skipped, error? }.

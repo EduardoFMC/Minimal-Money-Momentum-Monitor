@@ -4,7 +4,7 @@ import { uid, defaultData } from "../model";
 import { exportBackup, importBackup, importOfx, dataFilePath, isEncrypted, setPin, clearPin, isTauri } from "../backend";
 import { migrate } from "../model";
 import { parseOfx, guessCategory } from "../ofx";
-import { parseInterCsv, parseFaturaCsv, isOfx } from "../csv";
+import { parseInterCsv, parseFaturaCsv, dedupeTxs, isOfx } from "../csv";
 import { Field, DangerButton } from "./ui";
 
 export default function Settings({ data, update }) {
@@ -84,49 +84,37 @@ export default function Settings({ data, update }) {
     }
   };
 
-  // Insere transações parseadas (OFX ou CSV) com dedup por FITID/assinatura.
-  // extraNotes: partes adicionais da mensagem de resumo (ex.: linhas puladas).
+  // Insere transações parseadas (OFX ou CSV). Dedup: FITID para OFX; para CSV,
+  // contagem por assinatura — compras idênticas no mesmo dia são preservadas
+  // na 1ª importação e ignoradas na reimportação (ver dedupeTxs em csv.js).
   const importTxs = (txs, extraNotes = []) => {
     if (!txs.length) {
       setMsg(["Nenhuma transação para importar.", ...extraNotes].join(" "));
       return;
     }
-    const seenIds = new Set(data.settings.importedFitids || []);
-    const seenSig = new Set(data.expenses.map((t) => `${t.date}|${t.amount}|${(t.desc || "").replace(/\s+/g, " ").toLowerCase()}`));
-    const fresh = [];
-    const newIds = [];
-    for (const t of txs) {
-      const sig = `${t.date}|${t.amount}|${t.desc.replace(/\s+/g, " ").toLowerCase()}`;
-      if (t.fitid ? seenIds.has(t.fitid) : seenSig.has(sig)) continue;
-      if (t.fitid) {
-        seenIds.add(t.fitid);
-        newIds.push(t.fitid);
-      }
-      seenSig.add(sig);
-      fresh.push({
-        id: uid(),
-        date: t.date,
-        desc: t.desc,
-        amount: t.amount,
-        type: t.type,
-        catId: guessCategory(`${t.hist || ""} ${t.desc}`, data.categories),
-        recurring: false,
-        imported: true,
-      });
-    }
+    const { fresh, newIds, dup } = dedupeTxs(txs, data.expenses, data.settings.importedFitids);
     if (!fresh.length) {
       setMsg([`Nada novo: as ${txs.length} transações do arquivo já estavam importadas.`, ...extraNotes].join(" "));
       return;
     }
+    const rows = fresh.map((t) => ({
+      id: uid(),
+      date: t.date,
+      desc: t.desc,
+      amount: t.amount,
+      type: t.type,
+      catId: guessCategory(`${t.hist || ""} ${t.desc}`, data.categories),
+      recurring: false,
+      imported: true,
+    }));
     update((d) => ({
       ...d,
-      expenses: [...d.expenses, ...fresh],
+      expenses: [...d.expenses, ...rows],
       settings: { ...d.settings, importedFitids: [...(d.settings.importedFitids || []), ...newIds].slice(-5000) },
     }));
-    const dup = txs.length - fresh.length;
     setMsg(
       [
-        `${fresh.length} transação(ões) importada(s)` + (dup ? `, ${dup} duplicada(s) ignorada(s)` : "") + ".",
+        `${rows.length} transação(ões) importada(s)` + (dup ? `, ${dup} duplicada(s) ignorada(s)` : "") + ".",
         ...extraNotes,
         "Revise as categorias sugeridas.",
       ].join(" ")

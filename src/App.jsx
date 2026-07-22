@@ -13,11 +13,13 @@ import Investments from "./components/Investments";
 import Monitoring from "./components/Monitoring";
 import Settings from "./components/Settings";
 import Report from "./components/Report";
+import Planning from "./components/Planning";
 
 const TABS = [
   { id: "despesas", label: "Despesas" },
   { id: "investimentos", label: "Investimentos" },
   { id: "monitoramento", label: "Monitoramento" },
+  { id: "planejamento", label: "Planejamento" },
 ];
 
 function mergePrices(cur, updated) {
@@ -378,6 +380,7 @@ export default function App() {
         {tab === "despesas" && <Expenses data={data} update={update} onReport={setReportMonth} />}
         {tab === "investimentos" && <Investments data={data} update={update} />}
         {tab === "monitoramento" && <Monitoring data={data} update={update} />}
+        {tab === "planejamento" && <Planning data={data} update={update} />}
         {tab === "config" && <Settings data={data} update={update} />}
       </main>
 

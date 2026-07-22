@@ -593,6 +593,49 @@ textarea { resize: vertical; }
 
 .about { color: var(--muted); font-size: 11px; text-align: center; padding: 6px 0 2px; }
 
+/* ===== Planejamento (independência financeira) ===== */
+.progress-track {
+  height: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--pos));
+  border-radius: 6px;
+  transition: width 0.4s;
+}
+
+.plan-answer { display: flex; flex-direction: column; gap: 8px; }
+.plan-headline { font-size: 17px; font-weight: 700; }
+.plan-headline b { color: var(--pos); font-size: 19px; }
+.plan-headline.neg { color: var(--neg); font-size: 15px; }
+.plan-when { color: var(--muted); font-size: 13px; font-weight: 400; }
+.plan-sub { font-size: 12px; color: var(--text); line-height: 1.5; }
+.plan-sub.muted-line { color: var(--muted); }
+
+.scen-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.scen {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 3px 10px;
+}
+.scen b { color: var(--text); }
+.scen.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+
+.chip-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.eco-cats { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.eco-cats .chip b { margin-left: 3px; }
+.chip-btn { font-size: 11px; padding: 3px 9px; }
+
+.chart-ref-label { fill: var(--pos); font-size: 9px; opacity: 0.9; }
+
+input[type="range"] { padding: 0; accent-color: var(--accent); }
+
 /* ===== Relatório mensal ===== */
 .report { display: flex; flex-direction: column; gap: 12px; }
 .report-line { font-size: 12px; font-weight: 600; }

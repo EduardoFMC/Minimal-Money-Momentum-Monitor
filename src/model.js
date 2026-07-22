@@ -59,6 +59,8 @@ export function defaultData() {
       alertMovePct: 5,     // variação diária (%) que dispara alerta
       trayMode: false,     // X esconde para a bandeja em vez de fechar
       lastReportMonth: "", // último relatório mensal já exibido ("2026-06")
+      // Planejamento (independência financeira); null = pré-preencher com dados reais
+      plan: { aporte: null, freq: "mensal", pctRf: 70, custo: null, retirada: 4, rfAA: null, rvAA: 10, ipca: null, real: true, idade: null, eco: 0 },
     },
     categories: DEFAULT_CATEGORIES,
     expenses: [],   // { id, date, desc, catId, amount, type: "in"|"out", recurring, auto?, aporte? }
@@ -85,6 +87,7 @@ export function migrate(raw) {
   if (typeof d.settings.autoRefreshMin !== "number") d.settings.autoRefreshMin = 5;
   if (!(Number(d.settings.alertMovePct) > 0)) d.settings.alertMovePct = 5;
   if (typeof d.settings.lastReportMonth !== "string") d.settings.lastReportMonth = "";
+  d.settings.plan = { ...base.settings.plan, ...(raw.settings?.plan || {}) };
   if (d.categories.length === 0) d.categories = DEFAULT_CATEGORIES;
   d.version = 2;
   return d;

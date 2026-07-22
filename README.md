@@ -12,6 +12,7 @@ Todos os dados ficam **100% locais**, num único arquivo JSON.
 | **Despesas** | Entradas e saídas estilo app de banco: categorias, busca, filtro de assinaturas, gráfico por categoria (rosca), gasto por semana e entradas × saídas por mês. Assinaturas marcadas com ↻ são **lançadas automaticamente** a cada mês novo. Importação de **extrato OFX** com categoria sugerida e deduplicação. |
 | **Investimentos** | **Renda fixa** (CDB, LCI, Tesouro Direto…) com **valor atual estimado automaticamente** via CDI/Selic/IPCA do Banco Central (bruto + líquido de IR; LCI/LCA isentas). **Renda variável** (ações, FIIs, cripto, moedas, opções) com quantidade, preço médio e P/L. Quantidade negativa = perna vendida (travas/spreads). Aba **Resumo** com gráfico de **evolução do patrimônio reconstruída desde o 1º investimento** (via séries do Banco Central) e **projeção do futuro** (1/3/5/10 anos) separando rendimento de aportes. |
 | **Monitoramento** | Watchlist do que você ainda não comprou: ações, cripto, dólar/moedas, CDBs de outras corretoras… com preço-alvo e alerta visual quando atingido. |
+| **Planejamento** | Simulador de **independência financeira**: aportes recorrentes (semanal→semestral) divididos entre renda fixa e variável, com premissas puxadas do mercado real (CDI e IPCA do BCB, taxa ponderada da sua carteira) e custo de vida pré-preenchido com a média das suas despesas reais. Responde **em quantos anos você não precisa mais trabalhar** (regra da taxa de retirada segura), com gráfico até a meta, cenários conservador/atual/otimista, barra de progresso e renda passiva atual. RF simulada líquida de IR 15%; inflação descontada por padrão (resultado em R$ de hoje). Card **"E se eu gastar menos?"** ligado às Despesas reais: mostra seus maiores gastos médios por categoria e simula cortes — cada real economizado reduz a meta E vira aporte. |
 | **⚙ Configurações** | Paleta de cores customizável (presets + cor a cor, estilo Fan Control), token da brapi, categorias, backup, alertas/bandeja e proteção por PIN. |
 
 ### Ciclo 2 (jul/2026)
@@ -20,6 +21,10 @@ Todos os dados ficam **100% locais**, num único arquivo JSON.
   real (`Data Lançamento;Histórico;Descrição;Valor;Saldo`). Lançamentos de investimento
   (aplicações, resgates, BM&F) e pagamentos de fatura são pulados automaticamente para não
   duplicar com a aba Investimentos. Fatura do cartão em CSV com parser tolerante.
+  **Dedup por contagem**: reimportar o mesmo período (ou períodos sobrepostos) não duplica
+  nada, e compras idênticas no mesmo dia (dois lanches de R$ 10) são preservadas.
+  *Rotina mensal*: app do Inter → Extrato → escolher o período → Compartilhar/Exportar → CSV;
+  depois M4 → ⚙ → Importar do banco → "Extrato da conta (OFX/CSV)".
 - **Relatório mensal**: na virada do mês abre um resumo do mês fechado (entradas/saídas/saldo,
   comparação com a média dos 3 meses anteriores, top categorias, onde você mais gastou,
   assinaturas, aportes e patrimônio). Também disponível no botão "Relatório" das Despesas.

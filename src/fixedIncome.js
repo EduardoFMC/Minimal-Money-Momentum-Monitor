@@ -215,6 +215,29 @@ export async function estimateFixedAssets(fixed) {
   return { updates, errors };
 }
 
+// Taxas atuais de mercado para o Planejamento: CDI anualizado (última taxa
+// diária ^252) e IPCA acumulado em 12 meses. Usa o cache das séries do BCB.
+export async function currentMarketRates() {
+  const today = todayISO();
+  const cdiStart = addMonths(today.slice(0, 7), -1) + "-01";
+  const ipcaStart = addMonths(today.slice(0, 7), -14) + "-01";
+  const [rc, ri] = await Promise.allSettled([
+    fetchSeries(SERIES.cdi, cdiStart),
+    fetchSeries(SERIES.ipca, ipcaStart),
+  ]);
+  let cdiAA = null;
+  let ipca12 = null;
+  if (rc.status === "fulfilled" && rc.value.length) {
+    const last = rc.value[rc.value.length - 1].value;
+    cdiAA = (Math.pow(1 + last / 100, 252) - 1) * 100;
+  }
+  if (ri.status === "fulfilled" && ri.value.length) {
+    const last12 = ri.value.slice(-12);
+    ipca12 = (last12.reduce((f, e) => f * (1 + e.value / 100), 1) - 1) * 100;
+  }
+  return { cdiAA, ipca12 };
+}
+
 // ===== Curva de patrimônio (reconstrução do passado + projeção do futuro) =====
 
 const isoOf = (d) =>
